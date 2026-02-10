@@ -29,7 +29,6 @@ const CUSTOMER_ROLE_ID = process.env.CUSTOMER_ROLE_ID;
 const PAYHIP_PRODUCTS = {
   CraftingSystem: process.env.PAYHIP_SECRET_1,
   CharacterCreation: process.env.PAYHIP_SECRET_2
-  // add more products as needed
 };
 const PAYHIP_URL = "https://payhip.com/api/v2/license/verify";
 
@@ -209,7 +208,9 @@ client.on("interactionCreate", async interaction => {
       connection = joinVoiceChannel({
         channelId: vc.id,
         guildId: vc.guild.id,
-        adapterCreator: vc.guild.voiceAdapterCreator
+        adapterCreator: vc.guild.voiceAdapterCreator,
+        selfDeaf: false,
+        voiceEncryptionMode: "aead_aes256_gcm_rtpsize" // FIX for Render crash
       });
     }
 
