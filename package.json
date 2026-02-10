@@ -1,17 +1,19 @@
 {
-  "name": "discord-license-bot",
+  "name": "false9-assistant-bot",
   "version": "1.0.0",
+  "description": "Discord bot with license redeem system, music commands, and fun commands",
   "main": "bot.js",
   "type": "module",
   "scripts": {
     "start": "node bot.js"
   },
-"dependencies": {
-  "axios": "^1.6.0",
-  "discord.js": "^14.15.0",
-  "sqlite3": "^5.1.6",
-  "express": "^4.19.2",
-  "@discordjs/voice": "^0.17.0",
-  "ytdl-core": "^4.11.5",
-  "yt-search": "^2.10.4"
+  "dependencies": {
+    "axios": "^1.6.0",
+    "discord.js": "^14.15.0",
+    "sqlite3": "^5.1.6",
+    "express": "^4.19.2",
+    "@discordjs/voice": "^0.17.0",
+    "ytdl-core": "^4.11.5",
+    "yt-search": "^2.10.4"
+  }
 }
