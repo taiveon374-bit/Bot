@@ -3,7 +3,7 @@ import { REST } from "@discordjs/rest";
 import axios from "axios";
 import sqlite3 from "sqlite3";
 
-const DISCORD_TOKEN = "MTQ3MDgxMTQ1NjE5Nzg4NjIwNg.GYszNQ.U_k3oCBC7HowC23vqc1w3u3ZKRpcbpFyXMlGY8";
+const DISCORD_TOKEN = process.env.BOTTOKEN;
 const CLIENT_ID = "1470811456197886206";
 const GUILD_ID = "1388879154987929684";
 
