@@ -3,6 +3,7 @@ import { Client, GatewayIntentBits, SlashCommandBuilder, Routes } from "discord.
 import { REST } from "@discordjs/rest";
 import axios from "axios";
 import sqlite3 from "sqlite3";
+import express from "express";
 
 // ===============================
 // ENVIRONMENT VARIABLES (Set these in Render)
@@ -14,13 +15,23 @@ import sqlite3 from "sqlite3";
 // PAYHIP_SECRET_1 to PAYHIP_SECRET_10 = your 10 product secrets
 // ===============================
 
+// ------------------------
+// HTTP server for Render
+// ------------------------
+const app = express();
+app.get("/", (req, res) => res.send("Bot is running!"));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Web server listening on port ${PORT}`));
+
+// ------------------------
+// Discord bot setup
+// ------------------------
 const DISCORD_TOKEN = process.env.BOTTOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const CUSTOMER_ROLE_ID = process.env.CUSTOMER_ROLE_ID;
 const PAYHIP_URL = "https://payhip.com/api/v2/license/verify";
 
-// Map of products → secrets
 const PAYHIP_PRODUCTS = {
   CraftingSystem: process.env.PAYHIP_SECRET_1,
   CharacterCreation: process.env.PAYHIP_SECRET_2,
@@ -49,7 +60,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
 });
 
-// Slash command
+// Slash commands
 const commands = [
   new SlashCommandBuilder()
     .setName("redeem")
@@ -76,7 +87,7 @@ const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
   }
 })();
 
-// Ready
+// Ready event
 client.once("ready", () => {
   console.log(`Bot online as ${client.user.tag}`);
 });
@@ -89,7 +100,6 @@ client.on("interactionCreate", async interaction => {
   const licenseKey = interaction.options.getString("key");
   const discordUserId = interaction.user.id;
 
-  // Check if user already redeemed
   db.get("SELECT * FROM redeems WHERE discordUserId = ?", [discordUserId], async (_, row) => {
     if (row) {
       return interaction.reply({
@@ -98,7 +108,6 @@ client.on("interactionCreate", async interaction => {
       });
     }
 
-    // Check all products
     for (const [productId, secret] of Object.entries(PAYHIP_PRODUCTS)) {
       try {
         const r = await axios.get(PAYHIP_URL, {
@@ -107,7 +116,6 @@ client.on("interactionCreate", async interaction => {
         });
 
         if (r.data.data && r.data.data.enabled) {
-          // Check if license already used
           db.get("SELECT * FROM redeems WHERE licenseKey = ?", [licenseKey], (_, used) => {
             if (used) {
               return interaction.reply({
@@ -116,15 +124,13 @@ client.on("interactionCreate", async interaction => {
               });
             }
 
-            // Save redemption
             db.run(
               "INSERT INTO redeems VALUES (?, ?, ?)",
               [licenseKey, discordUserId, productId]
             );
 
-            // Give role
             interaction.guild.members.fetch(discordUserId).then(member => {
-              member.roles.add(CUSTOMER_ROLE_ID).catch(err => console.error(err));
+              member.roles.add(CUSTOMER_ROLE_ID).catch(console.error);
             });
 
             return interaction.reply({
@@ -133,10 +139,10 @@ client.on("interactionCreate", async interaction => {
             });
           });
 
-          return; // Stop checking other products
+          return; // stop checking other products
         }
       } catch (err) {
-        // Ignore, try next product
+        // ignore and try next product
       }
     }
 
