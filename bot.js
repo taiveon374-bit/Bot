@@ -1,47 +1,36 @@
-import {
-  Client,
-  GatewayIntentBits,
-  SlashCommandBuilder,
-  Routes
-} from "discord.js";
+// bot.js
+import { Client, GatewayIntentBits, SlashCommandBuilder, Routes } from "discord.js";
 import { REST } from "@discordjs/rest";
-import express from "express";
-import axios from "axios";
+import { joinVoiceChannel, createAudioPlayer, createAudioResource } from "@discordjs/voice";
+import playdl from "play-dl";
 import sqlite3 from "sqlite3";
-import ytdl from "ytdl-core";
-import yts from "yt-search";
-import {
-  joinVoiceChannel,
-  createAudioPlayer,
-  createAudioResource,
-  AudioPlayerStatus
-} from "@discordjs/voice";
+import axios from "axios";
 
-// ===============================
-// ENV VARIABLES
-// ===============================
+// ===== ENV VARIABLES =====
+// Set these in Render
+// BOTTOKEN, CLIENT_ID, GUILD_ID, CUSTOMER_ROLE_ID, PAYHIP_SECRET_1..10
+
 const DISCORD_TOKEN = process.env.BOTTOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const CUSTOMER_ROLE_ID = process.env.CUSTOMER_ROLE_ID;
-
-// PAYHIP Products
-const PAYHIP_PRODUCTS = {
-  CraftingSystem: process.env.PAYHIP_SECRET_1,
-  CharacterCreation: process.env.PAYHIP_SECRET_2
-};
 const PAYHIP_URL = "https://payhip.com/api/v2/license/verify";
 
-// ===============================
-// KEEP ALIVE (Render Web Service)
-// ===============================
-const app = express();
-app.get("/", (_, res) => res.send("Bot alive"));
-app.listen(process.env.PORT || 3000);
+// Products
+const PAYHIP_PRODUCTS = {
+  CraftingSystem: process.env.PAYHIP_SECRET_1,
+  CharacterCreation: process.env.PAYHIP_SECRET_2,
+  HoodSystemsPack: process.env.PAYHIP_SECRET_3,
+  CharacterCreation2: process.env.PAYHIP_SECRET_4,
+  HoodAssetsPack: process.env.PAYHIP_SECRET_5,
+  PoliceSystem: process.env.PAYHIP_SECRET_6,
+  AdvancedDuelsGame: process.env.PAYHIP_SECRET_7,
+  AdvancedPhoneSystem: process.env.PAYHIP_SECRET_8,
+  AdvancedGunSystem: process.env.PAYHIP_SECRET_9,
+  LowPolyNYC: process.env.PAYHIP_SECRET_10,
+};
 
-// ===============================
-// DATABASE
-// ===============================
+// Database
 const db = new sqlite3.Database("./redeems.db");
 db.run(`
   CREATE TABLE IF NOT EXISTS redeems (
@@ -51,216 +40,184 @@ db.run(`
   )
 `);
 
-// ===============================
-// COOLDOWN
-// ===============================
-const cooldowns = new Map();
-const REDEEM_COOLDOWN = 60 * 1000; // 1 minute
+// Music Queue
+const queue = new Map();
 
-function onCooldown(userId) {
-  const last = cooldowns.get(userId);
-  if (!last) return false;
-  return Date.now() - last < REDEEM_COOLDOWN;
-}
-
-// ===============================
-// DISCORD CLIENT
-// ===============================
+// Discord Client
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildVoiceStates
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMessages
   ]
 });
 
-// ===============================
-// MUSIC QUEUE
-// ===============================
-const queue = [];
-let connection = null;
-let currentSong = null;
-
-const player = createAudioPlayer();
-player.on(AudioPlayerStatus.Idle, () => playNext());
-
-function playNext() {
-  if (queue.length === 0) {
-    currentSong = null;
-    return;
-  }
-
-  const song = queue.shift();
-  currentSong = song;
-
-  const stream = ytdl(song.url, { filter: "audioonly", highWaterMark: 1 << 25 });
-  const resource = createAudioResource(stream);
-  player.play(resource);
-  connection.subscribe(player);
-}
-
-// ===============================
-// SLASH COMMANDS
-// ===============================
+// Commands
 const commands = [
-  // Redeem
   new SlashCommandBuilder()
     .setName("redeem")
-    .setDescription("Redeem a license key")
+    .setDescription("Redeem your license key")
     .addStringOption(opt =>
       opt.setName("key")
-        .setDescription("Your license key")
-        .setRequired(true)
+         .setDescription("Your license key")
+         .setRequired(true)
     ),
-  // Fun
-  new SlashCommandBuilder().setName("ping").setDescription("Ping test"),
-  new SlashCommandBuilder().setName("dice").setDescription("Roll a dice"),
-  new SlashCommandBuilder().setName("coinflip").setDescription("Flip a coin"),
-  // Music
   new SlashCommandBuilder()
     .setName("play")
-    .setDescription("Play a song by name or YouTube link")
+    .setDescription("Play a song from YouTube")
     .addStringOption(opt =>
-      opt.setName("song")
-        .setDescription("Song name or YouTube URL")
-        .setRequired(true)
+      opt.setName("query")
+         .setDescription("Song name or URL")
+         .setRequired(true)
     ),
-  new SlashCommandBuilder().setName("skip").setDescription("Skip current song"),
-  new SlashCommandBuilder().setName("stop").setDescription("Stop music and clear queue"),
-  new SlashCommandBuilder().setName("queue").setDescription("View music queue"),
-  new SlashCommandBuilder().setName("nowplaying").setDescription("See current playing song")
+  new SlashCommandBuilder()
+    .setName("skip")
+    .setDescription("Skip the currently playing song")
 ].map(c => c.toJSON());
 
-// ===============================
-// REGISTER COMMANDS
-// ===============================
+// Register commands
 const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
-await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-console.log("Commands registered");
+(async () => {
+  try {
+    console.log("Registering slash commands...");
+    await rest.put(
+      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+      { body: commands }
+    );
+    console.log("Commands registered!");
+  } catch (err) {
+    console.error(err);
+  }
+})();
 
-// ===============================
-// READY
-// ===============================
+// Cooldowns
+const cooldowns = new Map();
+
+// Ready
 client.once("ready", () => {
   console.log(`Bot online as ${client.user.tag}`);
 });
 
-// ===============================
-// INTERACTION HANDLER
-// ===============================
+// Interaction handler
 client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand()) return;
-  const { commandName, user, member } = interaction;
 
-  // -------------------------------
-  // FUN COMMANDS
-  // -------------------------------
-  if (commandName === "ping") return interaction.reply(`🏓 Pong! ${client.ws.ping}ms`);
-  if (commandName === "dice") return interaction.reply(`🎲 You rolled **${Math.floor(Math.random()*6)+1}**`);
-  if (commandName === "coinflip") return interaction.reply(`🪙 ${Math.random() > 0.5 ? "Heads" : "Tails"}`);
+  const userId = interaction.user.id;
 
-  // -------------------------------
-  // REDEEM COMMAND
-  // -------------------------------
-  if (commandName === "redeem") {
-    if (onCooldown(user.id)) return interaction.reply({ content: "⏳ You must wait before redeeming again.", ephemeral: true });
-    cooldowns.set(user.id, Date.now());
+  // Cooldown check
+  const now = Date.now();
+  const cooldownAmount = 5000; // 5 seconds
+  if (cooldowns.has(userId)) {
+    const expiration = cooldowns.get(userId) + cooldownAmount;
+    if (now < expiration) {
+      return interaction.reply({ content: `⏳ Please wait a few seconds before using commands again.`, ephemeral: true });
+    }
+  }
+  cooldowns.set(userId, now);
 
+  // ====== /redeem ======
+  if (interaction.commandName === "redeem") {
+    await interaction.deferReply({ ephemeral: true });
     const licenseKey = interaction.options.getString("key");
 
-    for (const [productId, secret] of Object.entries(PAYHIP_PRODUCTS)) {
-      try {
-        const r = await axios.get(PAYHIP_URL, {
-          params: { license_key: licenseKey },
-          headers: { "product-secret-key": secret }
-        });
+    db.get("SELECT * FROM redeems WHERE discordUserId = ?", [userId], async (_, row) => {
+      if (row) return interaction.editReply("❌ You have already redeemed a license.");
 
-        if (r.data?.data?.enabled) {
-          db.get("SELECT * FROM redeems WHERE licenseKey = ?", [licenseKey], async (_, row) => {
-            if (row) return interaction.reply({ content: "❌ This license key has already been redeemed.", ephemeral: true });
-
-            db.run("INSERT INTO redeems VALUES (?, ?, ?)", [licenseKey, user.id, productId]);
-
-            const guildMember = await interaction.guild.members.fetch(user.id);
-            await guildMember.roles.add(CUSTOMER_ROLE_ID);
-
-            return interaction.reply({ content: `✅ License redeemed for **${productId}**!`, ephemeral: true });
+      for (const [productId, secret] of Object.entries(PAYHIP_PRODUCTS)) {
+        try {
+          const res = await axios.get(PAYHIP_URL, {
+            params: { license_key: licenseKey },
+            headers: { "product-secret-key": secret }
           });
 
-          return;
-        }
-      } catch {}
-    }
+          if (res.data.data && res.data.data.enabled) {
+            db.get("SELECT * FROM redeems WHERE licenseKey = ?", [licenseKey], (_, used) => {
+              if (used) return interaction.editReply("❌ This license key has already been redeemed.");
 
-    return interaction.reply({ content: "❌ Invalid or already used license key.", ephemeral: true });
+              db.run("INSERT INTO redeems VALUES (?, ?, ?)", [licenseKey, userId, productId]);
+
+              interaction.guild.members.fetch(userId).then(member => {
+                member.roles.add(CUSTOMER_ROLE_ID).catch(console.error);
+              });
+
+              return interaction.editReply(`✅ License verified for **${productId}**!`);
+            });
+            return;
+          }
+        } catch {}
+      }
+      return interaction.editReply("❌ Invalid or already used license key.");
+    });
   }
 
-  // -------------------------------
-  // MUSIC COMMANDS
-  // -------------------------------
-  if (commandName === "play") {
-    await interaction.deferReply(); // avoids timeout
-    const query = interaction.options.getString("song");
-    const vc = member.voice.channel;
-    if (!vc) return interaction.followUp({ content: "❌ Join a voice channel first" });
+  // ====== /play ======
+  if (interaction.commandName === "play") {
+    await interaction.deferReply();
+    const query = interaction.options.getString("query");
+    const voiceChannel = interaction.member.voice.channel;
+    if (!voiceChannel) return interaction.editReply("❌ You must be in a voice channel to play music.");
 
-    if (!connection) {
-      connection = joinVoiceChannel({
-        channelId: vc.id,
-        guildId: vc.guild.id,
-        adapterCreator: vc.guild.voiceAdapterCreator,
-        selfDeaf: false,
-        voiceEncryptionMode: "aead_aes256_gcm_rtpsize" // FIX for Render crash
+    const permissions = voiceChannel.permissionsFor(interaction.client.user);
+    if (!permissions.has("Connect") || !permissions.has("Speak")) {
+      return interaction.editReply("❌ I need permissions to join and speak in your voice channel.");
+    }
+
+    let serverQueue = queue.get(interaction.guild.id);
+    if (!serverQueue) {
+      const connection = joinVoiceChannel({
+        channelId: voiceChannel.id,
+        guildId: interaction.guild.id,
+        adapterCreator: interaction.guild.voiceAdapterCreator,
       });
+
+      const player = createAudioPlayer();
+      connection.subscribe(player);
+
+      serverQueue = { connection, player, songs: [] };
+      queue.set(interaction.guild.id, serverQueue);
     }
 
-    let songUrl = query;
-    if (!ytdl.validateURL(query)) {
-      const r = await yts(query);
-      if (!r || !r.videos || r.videos.length === 0)
-        return interaction.followUp({ content: "❌ No results found" });
-      songUrl = r.videos[0].url;
+    try {
+      const ytInfo = await playdl.search(query, { limit: 1 });
+      if (!ytInfo || ytInfo.length === 0) return interaction.editReply("❌ No results found.");
+
+      const song = { title: ytInfo[0].title, url: ytInfo[0].url };
+      serverQueue.songs.push(song);
+
+      // Play immediately if nothing is playing
+      if (serverQueue.player.state.status !== "playing") {
+        const stream = await playdl.stream(song.url);
+        const resource = createAudioResource(stream.stream, { inputType: stream.type });
+        serverQueue.player.play(resource);
+        interaction.editReply(`🎶 Now playing: **${song.title}**`);
+      } else {
+        interaction.editReply(`➕ Added to queue: **${song.title}**`);
+      }
+    } catch (err) {
+      console.error(err);
+      interaction.editReply("❌ Error playing the song.");
     }
+  }
 
-    const info = await ytdl.getInfo(songUrl);
-    const title = info.videoDetails.title;
+  // ====== /skip ======
+  if (interaction.commandName === "skip") {
+    const serverQueue = queue.get(interaction.guild.id);
+    if (!serverQueue || serverQueue.songs.length === 0) return interaction.reply({ content: "❌ Nothing to skip.", ephemeral: true });
 
-    queue.push({ title, url: songUrl });
+    serverQueue.player.stop();
+    serverQueue.songs.shift(); // remove current song
 
-    if (!currentSong) {
-      playNext();
-      return interaction.followUp(`🎶 **Now playing:** ${title}`);
+    if (serverQueue.songs.length > 0) {
+      const nextSong = serverQueue.songs[0];
+      const stream = await playdl.stream(nextSong.url);
+      const resource = createAudioResource(stream.stream, { inputType: stream.type });
+      serverQueue.player.play(resource);
+      interaction.reply(`⏭ Skipped! Now playing: **${nextSong.title}**`);
     } else {
-      return interaction.followUp(`➕ Added to queue: **${title}**`);
+      interaction.reply("⏭ Skipped! Queue is empty.");
     }
-  }
-
-  if (commandName === "skip") {
-    if (!currentSong) return interaction.reply("❌ No song is playing");
-    player.stop();
-    return interaction.reply("⏭️ Skipped the song");
-  }
-
-  if (commandName === "stop") {
-    queue.length = 0;
-    currentSong = null;
-    player.stop();
-    connection?.destroy();
-    connection = null;
-    return interaction.reply("⏹️ Music stopped & queue cleared");
-  }
-
-  if (commandName === "queue") {
-    if (queue.length === 0) return interaction.reply("📭 Queue is empty");
-    const list = queue.map((s, i) => `${i + 1}. ${s.title}`).join("\n");
-    return interaction.reply(`🎵 **Queue:**\n${list}`);
-  }
-
-  if (commandName === "nowplaying") {
-    if (!currentSong) return interaction.reply("❌ Nothing playing");
-    return interaction.reply(`🎶 **Now playing:** ${currentSong.title}`);
   }
 });
 
-// ===============================
 client.login(DISCORD_TOKEN);
