@@ -4,14 +4,12 @@ import {
   SlashCommandBuilder,
   Routes
 } from "discord.js";
-
 import { REST } from "@discordjs/rest";
 import express from "express";
 import axios from "axios";
 import sqlite3 from "sqlite3";
 import ytdl from "ytdl-core";
 import yts from "yt-search";
-
 import {
   joinVoiceChannel,
   createAudioPlayer,
@@ -20,23 +18,30 @@ import {
 } from "@discordjs/voice";
 
 // ===============================
-// ENV
+// ENV VARIABLES
 // ===============================
 const DISCORD_TOKEN = process.env.BOTTOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const CUSTOMER_ROLE_ID = process.env.CUSTOMER_ROLE_ID;
+
+// PAYHIP Products
+const PAYHIP_PRODUCTS = {
+  CraftingSystem: process.env.PAYHIP_SECRET_1,
+  CharacterCreation: process.env.PAYHIP_SECRET_2
+  // add more products as needed
+};
 const PAYHIP_URL = "https://payhip.com/api/v2/license/verify";
 
 // ===============================
-// KEEP ALIVE (Render)
+// KEEP ALIVE (Render Web Service)
 // ===============================
 const app = express();
 app.get("/", (_, res) => res.send("Bot alive"));
 app.listen(process.env.PORT || 3000);
 
 // ===============================
-// DATABASE (Redeems)
+// DATABASE
 // ===============================
 const db = new sqlite3.Database("./redeems.db");
 db.run(`
@@ -48,19 +53,10 @@ db.run(`
 `);
 
 // ===============================
-// PAYHIP PRODUCTS
-// ===============================
-const PAYHIP_PRODUCTS = {
-  CraftingSystem: process.env.PAYHIP_SECRET_1,
-  CharacterCreation: process.env.PAYHIP_SECRET_2
-  // add more as needed
-};
-
-// ===============================
-// COOLDOWN SYSTEM
+// COOLDOWN
 // ===============================
 const cooldowns = new Map();
-const REDEEM_COOLDOWN = 60 * 1000; // 60s
+const REDEEM_COOLDOWN = 60 * 1000; // 1 minute
 
 function onCooldown(userId) {
   const last = cooldowns.get(userId);
@@ -141,7 +137,6 @@ const commands = [
 // ===============================
 const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
 await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-
 console.log("Commands registered");
 
 // ===============================
@@ -152,7 +147,7 @@ client.once("ready", () => {
 });
 
 // ===============================
-// INTERACTIONS
+// INTERACTION HANDLER
 // ===============================
 client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand()) return;
@@ -163,34 +158,34 @@ client.on("interactionCreate", async interaction => {
   // -------------------------------
   if (commandName === "ping") return interaction.reply(`🏓 Pong! ${client.ws.ping}ms`);
   if (commandName === "dice") return interaction.reply(`🎲 You rolled **${Math.floor(Math.random()*6)+1}**`);
-  if (commandName === "coinflip") return interaction.reply(`🪙 ${Math.random()>0.5 ? "Heads":"Tails"}`);
+  if (commandName === "coinflip") return interaction.reply(`🪙 ${Math.random() > 0.5 ? "Heads" : "Tails"}`);
 
   // -------------------------------
   // REDEEM COMMAND
   // -------------------------------
   if (commandName === "redeem") {
-    if (onCooldown(user.id)) return interaction.reply({ content: "⏳ You must wait before redeeming again.", ephemeral:true });
+    if (onCooldown(user.id)) return interaction.reply({ content: "⏳ You must wait before redeeming again.", ephemeral: true });
     cooldowns.set(user.id, Date.now());
 
     const licenseKey = interaction.options.getString("key");
 
     for (const [productId, secret] of Object.entries(PAYHIP_PRODUCTS)) {
       try {
-        const r = await axios.get("https://payhip.com/api/v2/license/verify", {
+        const r = await axios.get(PAYHIP_URL, {
           params: { license_key: licenseKey },
           headers: { "product-secret-key": secret }
         });
 
         if (r.data?.data?.enabled) {
           db.get("SELECT * FROM redeems WHERE licenseKey = ?", [licenseKey], async (_, row) => {
-            if (row) return interaction.reply({ content:"❌ This license key has already been redeemed.", ephemeral:true });
+            if (row) return interaction.reply({ content: "❌ This license key has already been redeemed.", ephemeral: true });
 
             db.run("INSERT INTO redeems VALUES (?, ?, ?)", [licenseKey, user.id, productId]);
 
             const guildMember = await interaction.guild.members.fetch(user.id);
             await guildMember.roles.add(CUSTOMER_ROLE_ID);
 
-            return interaction.reply({ content:`✅ License redeemed for **${productId}**!`, ephemeral:true });
+            return interaction.reply({ content: `✅ License redeemed for **${productId}**!`, ephemeral: true });
           });
 
           return;
@@ -198,24 +193,31 @@ client.on("interactionCreate", async interaction => {
       } catch {}
     }
 
-    return interaction.reply({ content:"❌ Invalid or already used license key.", ephemeral:true });
+    return interaction.reply({ content: "❌ Invalid or already used license key.", ephemeral: true });
   }
 
   // -------------------------------
   // MUSIC COMMANDS
   // -------------------------------
   if (commandName === "play") {
+    await interaction.deferReply(); // avoids timeout
     const query = interaction.options.getString("song");
     const vc = member.voice.channel;
-    if (!vc) return interaction.reply({ content: "❌ Join a voice channel first", ephemeral:true });
+    if (!vc) return interaction.followUp({ content: "❌ Join a voice channel first" });
 
-    if (!connection) connection = joinVoiceChannel({ channelId: vc.id, guildId: vc.guild.id, adapterCreator: vc.guild.voiceAdapterCreator });
+    if (!connection) {
+      connection = joinVoiceChannel({
+        channelId: vc.id,
+        guildId: vc.guild.id,
+        adapterCreator: vc.guild.voiceAdapterCreator
+      });
+    }
 
     let songUrl = query;
-
     if (!ytdl.validateURL(query)) {
       const r = await yts(query);
-      if (!r || !r.videos || r.videos.length === 0) return interaction.reply({ content:"❌ No results found", ephemeral:true });
+      if (!r || !r.videos || r.videos.length === 0)
+        return interaction.followUp({ content: "❌ No results found" });
       songUrl = r.videos[0].url;
     }
 
@@ -226,9 +228,9 @@ client.on("interactionCreate", async interaction => {
 
     if (!currentSong) {
       playNext();
-      return interaction.reply(`🎶 **Now playing:** ${title}`);
+      return interaction.followUp(`🎶 **Now playing:** ${title}`);
     } else {
-      return interaction.reply(`➕ Added to queue: **${title}**`);
+      return interaction.followUp(`➕ Added to queue: **${title}**`);
     }
   }
 
@@ -249,7 +251,7 @@ client.on("interactionCreate", async interaction => {
 
   if (commandName === "queue") {
     if (queue.length === 0) return interaction.reply("📭 Queue is empty");
-    const list = queue.map((s,i)=>`${i+1}. ${s.title}`).join("\n");
+    const list = queue.map((s, i) => `${i + 1}. ${s.title}`).join("\n");
     return interaction.reply(`🎵 **Queue:**\n${list}`);
   }
 
